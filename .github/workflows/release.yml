@@ -1,0 +1,61 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 读取版本号
+        id: ver
+        run: |
+          VERSION=$(node -p "require('./manifest.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "xpi=zotero-collection-nav-$VERSION.xpi" >> "$GITHUB_OUTPUT"
+
+      - name: 校验 tag 与 manifest 版本一致
+        run: |
+          TAG="${GITHUB_REF#refs/tags/v}"
+          if [ "$TAG" != "${{ steps.ver.outputs.version }}" ]; then
+            echo "tag v$TAG 与 manifest 版本 ${{ steps.ver.outputs.version }} 不一致"
+            exit 1
+          fi
+
+      - name: 跑单元测试
+        run: node test/logic.test.js
+
+      - name: 打包 xpi
+        run: node tools/build.js
+
+      - name: 生成 update.json
+        run: node tools/make-update-json.js
+
+      - name: 创建 Release 并上传 xpi
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/${{ steps.ver.outputs.xpi }}
+          generate_release_notes: true
+
+      - name: 提交 update.json 回 main
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add update.json
+          if git diff --staged --quiet; then
+            echo "update.json 无变化"
+          else
+            git commit -m "chore: update.json for v${{ steps.ver.outputs.version }}"
+            git push origin HEAD:main
+          fi
